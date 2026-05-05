@@ -472,9 +472,60 @@
       hold: 10,
       transition: 30,
     };
-    let insertAt = (selectedIndex !== null) ? selectedIndex + 1 : score.snapshots.length;
-    score.snapshots.splice(insertAt, 0, snap);
-    selectSnapshot(insertAt);
+    const TOL = 1e-3;
+
+    // Empty score: just push.
+    if (score.snapshots.length === 0) {
+      score.snapshots.push(snap);
+      selectSnapshot(0);
+      fitTimelineZoom();
+      refreshUI();
+      return;
+    }
+
+    // Past the end: append.
+    const total = totalDuration();
+    if (currentTime >= total - TOL) {
+      score.snapshots.push(snap);
+      selectSnapshot(score.snapshots.length - 1);
+      fitTimelineZoom();
+      refreshUI();
+      return;
+    }
+
+    // Insert at the playhead. Find which segment currentTime lives in and
+    // splice the new snapshot so it begins exactly at currentTime, adjusting
+    // the previous snapshot's hold or transition so the times line up.
+    const seg = getSegmentForTime(currentTime);
+    const fromIdx = seg.from;
+    const fromSnap = score.snapshots[fromIdx];
+    const segStart = snapshotStartTime(fromIdx);
+
+    if (seg.from === seg.to) {
+      // Inside the hold of fromSnap.
+      const intoHold = currentTime - segStart;
+      if (intoHold < TOL) {
+        // We're sitting right on fromSnap's start — insert before it so the
+        // new snapshot occupies this moment and fromSnap shifts forward.
+        score.snapshots.splice(fromIdx, 0, snap);
+        selectSnapshot(fromIdx);
+      } else {
+        // Cut the hold short at the playhead. fromSnap's transition becomes
+        // 0 so the new snap takes over immediately.
+        fromSnap.hold = intoHold;
+        fromSnap.transition = 0;
+        score.snapshots.splice(fromIdx + 1, 0, snap);
+        selectSnapshot(fromIdx + 1);
+      }
+    } else {
+      // Inside the transition from fromSnap to fromSnap+1. Shorten the
+      // transition so it ends right at the playhead, then drop the new
+      // snapshot in between.
+      const intoTrans = currentTime - (segStart + fromSnap.hold);
+      fromSnap.transition = intoTrans;
+      score.snapshots.splice(fromIdx + 1, 0, snap);
+      selectSnapshot(fromIdx + 1);
+    }
     fitTimelineZoom();
     refreshUI();
   }
@@ -1126,17 +1177,26 @@
       py: (e.touches ? e.touches[0].clientY : e.clientY) - r.top,
     };
   }
+  // Hit test: returns the snapshot whose visible region (marker + hold +
+  // transition bars) contains px. Last snapshot has no transition bar so
+  // its region is just hold. Falls back to the closest marker within 14px
+  // when the cursor is between snapshots (e.g. a transition with 0 width).
   function findSnapshotAtX(px) {
     if (score.snapshots.length === 0) return -1;
-    let best = -1, bestD = 14;
     let acc = 0;
+    let nearest = -1, nearestD = 14;
     for (let i = 0; i < score.snapshots.length; i++) {
-      const cx = TL_PAD_LEFT + acc * timelineZoom;
-      const d = Math.abs(cx - px);
-      if (d < bestD) { bestD = d; best = i; }
-      acc += score.snapshots[i].hold + score.snapshots[i].transition;
+      const s = score.snapshots[i];
+      const startX = TL_PAD_LEFT + acc * timelineZoom;
+      const isLast = i === score.snapshots.length - 1;
+      const span = s.hold + (isLast ? 0 : s.transition);
+      const endX = startX + span * timelineZoom;
+      if (px >= startX && px < endX) return i;
+      const d = Math.abs(startX - px);
+      if (d < nearestD) { nearestD = d; nearest = i; }
+      acc += s.hold + s.transition;
     }
-    return best;
+    return nearest;
   }
 
   let tlScrubbing = false;
