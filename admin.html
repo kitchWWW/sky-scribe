@@ -319,7 +319,7 @@
       <span class="label">Timeline</span>
       <button class="zoom-btn" id="zoom-out-btn" type="button">−</button>
       <button class="zoom-btn" id="zoom-in-btn" type="button">+</button>
-      <span class="hint">click marker to edit · drag marker to reorder · drag empty area to scrub · drag stars to update selected snapshot</span>
+      <span class="hint">click top strip to set playhead · click marker to edit · drag marker to reorder · drag stars to update live state</span>
     </div>
     <div id="tl-scroll">
       <canvas id="timeline"></canvas>
@@ -416,6 +416,7 @@
   let timelineZoom = 30;        // px per second
   const TL_PAD_LEFT = 16;
   const TL_PAD_RIGHT = 80;
+  const TL_SCRUB_STRIP_H = 28;   // top strip dedicated to playhead scrubbing
 
   function totalDuration() {
     if (score.snapshots.length === 0) return 0;
@@ -933,10 +934,48 @@
   }
 
   // ====== Timeline drawing ======
-  // Layout in design CSS pixels:
-  //   row at y=24..52: scale ticks and labels
-  //   row at y=70..130: snapshot bar (boxes + transitions)
-  //   row at y=146..170: playhead handle text
+  // Renders a tiny snapshot of the sky scene next to a marker. cx is the
+  // marker's x (start of the snapshot's hold) — the preview is centered on it
+  // and sits in topY..topY+size.
+  function drawSnapshotPreview(snap, cx, topY, size) {
+    const left = cx - size / 2;
+    const angle = snap.wheelAngle;
+    const nightness = (1 - Math.cos(angle)) / 2;
+    const twilight = 1 - Math.abs(nightness - 0.5) * 2;
+    const topC = lerpColor(lerpColor([120, 175, 220], [60, 40, 90], twilight), [10, 8, 30], nightness);
+    const botC = lerpColor(lerpColor([220, 230, 240], [220, 110, 80], twilight), [25, 18, 55], nightness);
+
+    tlCtx.save();
+    tlCtx.beginPath();
+    tlCtx.rect(left, topY, size, size);
+    tlCtx.clip();
+
+    const grad = tlCtx.createLinearGradient(left, topY, left, topY + size);
+    grad.addColorStop(0, rgb(topC));
+    grad.addColorStop(1, rgb(botC));
+    tlCtx.fillStyle = grad;
+    tlCtx.fillRect(left, topY, size, size);
+
+    const starAlpha = Math.max(0.55, nightness);
+    for (const s of snap.stars) {
+      const sx = left + s.x * size;
+      const sy = topY + s.y * size;
+      tlCtx.fillStyle = `rgba(255, 240, 200, ${0.3 * starAlpha})`;
+      tlCtx.beginPath();
+      tlCtx.arc(sx, sy, 2.5, 0, Math.PI * 2);
+      tlCtx.fill();
+      tlCtx.fillStyle = `rgba(255, 255, 255, ${starAlpha})`;
+      tlCtx.beginPath();
+      tlCtx.arc(sx, sy, 1.2, 0, Math.PI * 2);
+      tlCtx.fill();
+    }
+    tlCtx.restore();
+
+    tlCtx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    tlCtx.lineWidth = 1;
+    tlCtx.strokeRect(left + 0.5, topY + 0.5, size - 1, size - 1);
+  }
+
   function drawTimeline() {
     const cssW = parseFloat(tlCanvas.style.width || '0');
     const cssH = parseFloat(tlCanvas.style.height || '0');
@@ -946,6 +985,19 @@
     const total = totalDuration();
     const barTop = 70, barBot = 130;
     const tickTop = 22;
+    const previewSize = 36;
+    const previewTop = barTop - 4 - previewSize;
+
+    // Scrub strip background — visual cue that the top band is dedicated
+    // to clicking/dragging the playhead anywhere along the timeline.
+    tlCtx.fillStyle = 'rgba(60, 70, 110, 0.18)';
+    tlCtx.fillRect(0, 0, cssW, TL_SCRUB_STRIP_H);
+    tlCtx.strokeStyle = 'rgba(120, 140, 200, 0.25)';
+    tlCtx.lineWidth = 1;
+    tlCtx.beginPath();
+    tlCtx.moveTo(0, TL_SCRUB_STRIP_H + 0.5);
+    tlCtx.lineTo(cssW, TL_SCRUB_STRIP_H + 0.5);
+    tlCtx.stroke();
 
     // Tick interval (seconds per major tick) chosen so ticks are roughly 80-120px apart
     const targetPx = 100;
@@ -1007,6 +1059,10 @@
         tlCtx.stroke();
         tlCtx.setLineDash([]);
       }
+
+      // Scene preview thumbnail above the marker — a tiny rendering of the
+      // sky at this snapshot's wheel angle and star positions.
+      drawSnapshotPreview(sn, startX, previewTop, previewSize);
 
       // Snapshot marker (circle at start)
       const cx = startX, cy = (barTop + barBot) / 2;
@@ -1220,6 +1276,16 @@
   tlCanvas.addEventListener('mousedown', (e) => {
     if (!audio) audio = setupAudio();
     const xy = tlPointerXY(e);
+    // Top strip is always playhead-scrub, regardless of what's beneath it.
+    if (xy.py < TL_SCRUB_STRIP_H) {
+      pauseScore();
+      tlScrubbing = true;
+      currentTime = Math.min(totalDuration(), tlPointerTime(e));
+      applyTimeToLive(currentTime);
+      selectSnapshot(null);
+      refreshUI();
+      return;
+    }
     const idx = findSnapshotAtX(xy.px);
     if (idx >= 0) {
       pauseScore();
