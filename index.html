@@ -128,10 +128,7 @@
   <aside id="right-panel">
     <h1>Sky Scribe</h1>
     <p class="description">
-      An interactive sonification of an imaginary sky. Every star binds to two parameters of a generative synthesizer — its horizontal position governs one, its vertical position the other. Drag stars across the canvas to reshape the sound they control.
-    </p>
-    <p class="description">
-      Hold <strong>Shift</strong> and click two stars to forge a constellation: the line that joins them couples their parameters into the rest of the patch, introducing harmonic chaos. The wheel anchored to the horizon is both the day-night cycle and the master volume — sun overhead is silence, moon overhead is full audio. Drag the sun or moon to spin it, or enable time below to let it rotate on its own.
+      Congratulations on your new position as the local Terra's sky scribe! Your job is to make the sky of your pocket dimension match the sky at your boss is directing everyone else to have. Look up at the projector to see the relative positions of the stars, and click and drag the stars around for your world to match. You can slack off during the day if you want...
     </p>
     <div class="time-control">
       <button id="time-btn" type="button" aria-pressed="false">Enable time</button>
@@ -141,7 +138,7 @@
       <canvas id="synth-canvas"></canvas>
     </div>
     <div class="hint">
-      <strong>Drag</strong> stars · <strong>Shift+click</strong> to link · <strong>Turn the wheel</strong> for volume
+      <strong>Drag</strong> stars · <strong>Turn the wheel</strong> for volume
     </div>
   </aside>
 </div>
@@ -155,25 +152,36 @@
   const synthCtx = synthCanvas.getContext('2d');
 
   let W = 0, H = 0;
-  function resize() {
-    const rect = document.getElementById('sky-wrap').getBoundingClientRect();
+  // Buffer-size sync runs inside the animation loop (see ensureCanvasSizes
+  // below) instead of in a resize listener / ResizeObserver. The reason:
+  // assigning to canvas.width/height clears the canvas, and an out-of-band
+  // observer can fire AFTER the rAF draw within a single frame — clearing the
+  // already-drawn pixels and producing a black flash before the next frame
+  // paints. Doing the sync immediately before draw keeps clear+draw atomic
+  // from the user's perspective.
+  let lastSkyW = -1, lastSkyH = -1;
+  let lastSynthW = -1, lastSynthH = -1;
+  function ensureCanvasSizes() {
     const dpr = window.devicePixelRatio || 1;
-    W = rect.width;
-    H = rect.height;
-    sky.width = W * dpr;
-    sky.height = H * dpr;
-    sky.style.width = W + 'px';
-    sky.style.height = H + 'px';
-    skyCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const sRect = synthCanvas.getBoundingClientRect();
-    synthCanvas.width = sRect.width * dpr;
-    synthCanvas.height = sRect.height * dpr;
-    synthCanvas.style.width = sRect.width + 'px';
-    synthCanvas.style.height = sRect.height + 'px';
-    synthCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const skyRect = sky.getBoundingClientRect();
+    if (skyRect.width !== lastSkyW || skyRect.height !== lastSkyH) {
+      sky.width = Math.max(1, skyRect.width * dpr);
+      sky.height = Math.max(1, skyRect.height * dpr);
+      skyCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      W = skyRect.width;
+      H = skyRect.height;
+      lastSkyW = skyRect.width;
+      lastSkyH = skyRect.height;
+    }
+    const synthRect = synthCanvas.getBoundingClientRect();
+    if (synthRect.width !== lastSynthW || synthRect.height !== lastSynthH) {
+      synthCanvas.width = Math.max(1, synthRect.width * dpr);
+      synthCanvas.height = Math.max(1, synthRect.height * dpr);
+      synthCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lastSynthW = synthRect.width;
+      lastSynthH = synthRect.height;
+    }
   }
-  window.addEventListener('resize', resize);
 
   // ====== Background stars (decorative) ======
   const bgStars = [];
@@ -225,7 +233,6 @@
   }
   makeStars();
 
-  const constellations = []; // pairs of star ids
 
   // Wheel of day/night (master volume).
   // angle = 0 → sun at top of wheel (full day, silent)
@@ -246,7 +253,6 @@
   let dragging = null;
   let draggingSun = false;
   let dragMoved = false;
-  let connectFirst = null;
   let hoveredStarId = null;
 
   // ====== Time automation ======
@@ -347,25 +353,8 @@
       }
       return;
     }
-    if (e.shiftKey) {
-      if (connectFirst === null) {
-        connectFirst = s.id;
-        s.glow = 1;
-      } else if (connectFirst !== s.id) {
-        const a = Math.min(connectFirst, s.id), b = Math.max(connectFirst, s.id);
-        const exists = constellations.find(c => c[0] === a && c[1] === b);
-        if (!exists) constellations.push([a, b]);
-        else constellations.splice(constellations.indexOf(exists), 1);
-        stars[connectFirst].glow = 0;
-        connectFirst = null;
-      } else {
-        stars[connectFirst].glow = 0;
-        connectFirst = null;
-      }
-    } else {
-      dragging = s;
-      dragMoved = false;
-    }
+    dragging = s;
+    dragMoved = false;
   });
 
   sky.addEventListener('mousemove', (e) => {
@@ -571,16 +560,6 @@
     const xv = Math.max(0, Math.min(1, (raw - e0) / (e1 - e0)));
     const audioAmount = xv * xv * (3 - 2 * xv);
     audio.master.gain.setTargetAtTime(audioAmount * 0.5, t, 0.04);
-
-    // Constellation lines further mix params: pairs add/subtract pitch via detune
-    let pitchShift = 0;
-    for (const [a, b] of constellations) {
-      const dx = (s[a].x - s[b].x);
-      const dy = (s[a].y - s[b].y);
-      pitchShift += (dx + dy) * 80;
-    }
-    // tweak osc2 detune extra for connected lines (additional param-coupling chaos)
-    audio.osc2.detune.setTargetAtTime(lerp(-1200, 1200, s[1].x) + pitchShift, t, tc);
   }
 
   // ====== Drawing ======
@@ -660,32 +639,6 @@
         skyCtx.fillStyle = `rgba(220, 230, 255, ${a})`;
         skyCtx.fill();
       }
-    }
-
-    // Constellation lines
-    skyCtx.lineCap = 'round';
-    for (const [a, b] of constellations) {
-      const sa = stars[a], sb = stars[b];
-      const grad = skyCtx.createLinearGradient(sa.x*W, sa.y*H, sb.x*W, sb.y*H);
-      grad.addColorStop(0, 'rgba(180, 200, 255, 0.55)');
-      grad.addColorStop(1, 'rgba(255, 220, 180, 0.55)');
-      skyCtx.strokeStyle = grad;
-      skyCtx.lineWidth = 1.5;
-      skyCtx.beginPath();
-      skyCtx.moveTo(sa.x * W, sa.y * H);
-      skyCtx.lineTo(sb.x * W, sb.y * H);
-      skyCtx.stroke();
-    }
-
-    // Pending connect line (preview)
-    if (connectFirst !== null) {
-      const sf = stars[connectFirst];
-      skyCtx.strokeStyle = 'rgba(255, 220, 150, 0.3)';
-      skyCtx.setLineDash([4, 4]);
-      skyCtx.beginPath();
-      skyCtx.arc(sf.x * W, sf.y * H, 18, 0, Math.PI * 2);
-      skyCtx.stroke();
-      skyCtx.setLineDash([]);
     }
 
     // Active stars — also fade in daytime, but stay slightly visible so they're draggable
@@ -837,6 +790,8 @@
     const w = synthCanvas.getBoundingClientRect().width;
     const h = synthCanvas.getBoundingClientRect().height;
     synthCtx.clearRect(0, 0, w, h);
+    // Uniform shrink for narrow panels — diagram was tuned around ~600px wide.
+    const ds = Math.min(1, w / 600);
 
     const modules = [
       { id: 'osc1', label: 'OSC1', x: 0.08, y: 0.25, stars: [0] },
@@ -861,8 +816,7 @@
       ['osc1', 'osc2'],
     ];
 
-    const activeId = hoveredStarId !== null ? hoveredStarId
-                   : (connectFirst !== null ? connectFirst : null);
+    const activeId = hoveredStarId;
     const primary = new Set();
     if (activeId !== null) {
       for (const m of modules) {
@@ -909,14 +863,14 @@
 
     for (const m of modules) {
       const x = m.x * w, y = m.y * h;
-      const boxW = 64, boxH = 32;
+      const boxW = 64 * ds, boxH = 32 * ds;
       const isPrimary = primary.has(m.id);
       const isSecondary = secondary.has(m.id);
 
       if (isPrimary || isSecondary) {
         const pulse = 0.5 + 0.5 * Math.sin(time * 0.008);
         const glowAlpha = isPrimary ? 0.55 + pulse * 0.35 : 0.25 + pulse * 0.2;
-        const glowR = isPrimary ? 44 : 32;
+        const glowR = (isPrimary ? 44 : 32) * ds;
         const glow = synthCtx.createRadialGradient(x, y, 0, x, y, glowR);
         glow.addColorStop(0, `rgba(255, 220, 140, ${glowAlpha})`);
         glow.addColorStop(1, 'rgba(255, 220, 140, 0)');
@@ -934,21 +888,21 @@
       synthCtx.fillRect(x - boxW/2, y - boxH/2, boxW, boxH);
       synthCtx.strokeRect(x - boxW/2, y - boxH/2, boxW, boxH);
       synthCtx.fillStyle = isPrimary ? '#fff4d8' : '#d8d8e8';
-      synthCtx.font = '11px -apple-system, sans-serif';
+      synthCtx.font = `${11 * ds}px -apple-system, sans-serif`;
       synthCtx.textAlign = 'center';
       synthCtx.textBaseline = 'middle';
-      synthCtx.fillText(m.label, x, y - 4);
+      synthCtx.fillText(m.label, x, y - 4 * ds);
 
-      synthCtx.font = '9px -apple-system, sans-serif';
+      synthCtx.font = `${9 * ds}px -apple-system, sans-serif`;
       synthCtx.fillStyle = isPrimary ? '#ffe8a8' : '#ffd88a';
       const badges = m.stars.map(i => `★${i+1}`).join(' ');
-      synthCtx.fillText(badges, x, y + 9);
+      synthCtx.fillText(badges, x, y + 9 * ds);
     }
 
     if (activeId !== null) {
       const lab = STAR_LABELS[activeId];
       const s = stars[activeId];
-      synthCtx.font = '11px -apple-system, sans-serif';
+      synthCtx.font = `${11 * ds}px -apple-system, sans-serif`;
       synthCtx.fillStyle = '#ffd88a';
       synthCtx.textAlign = 'right';
       synthCtx.textBaseline = 'top';
@@ -975,13 +929,13 @@
 
   // ====== Loop ======
   function loop(time) {
+    ensureCanvasSizes();
     updateTime(time);
     drawSky(time);
     drawSynth(time);
     applyParams();
     requestAnimationFrame(loop);
   }
-  resize();
   requestAnimationFrame(loop);
 })();
 </script>
