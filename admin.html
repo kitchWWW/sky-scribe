@@ -594,6 +594,7 @@
         currentTime = 0;
         selectSnapshot(null);
         if (score.snapshots.length > 0) applyTimeToLive(0);
+        fitTimelineZoom();
         refreshUI();
       } catch (e) {
         alert('Failed to load score: ' + e.message);
@@ -1197,26 +1198,16 @@
     snapDrag = null;
   });
 
-  // Mouse-wheel zoom on timeline
-  tlScroll.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) return; // let vertical scroll pass
-    e.preventDefault();
-    const direction = (e.deltaX || e.deltaY) > 0 ? -1 : 1;
-    setZoom(timelineZoom * (direction > 0 ? 1.2 : 1 / 1.2), e.clientX);
-  }, { passive: false });
-
-  function setZoom(z, anchorClientX) {
-    const newZoom = Math.max(2, Math.min(400, z));
-    if (anchorClientX !== undefined) {
-      const r = tlScroll.getBoundingClientRect();
-      const anchorPxInScroll = anchorClientX - r.left + tlScroll.scrollLeft;
-      const anchorTime = (anchorPxInScroll - TL_PAD_LEFT) / timelineZoom;
-      timelineZoom = newZoom;
-      const newAnchorPx = TL_PAD_LEFT + anchorTime * timelineZoom;
-      tlScroll.scrollLeft = newAnchorPx - (anchorClientX - r.left);
-    } else {
-      timelineZoom = newZoom;
-    }
+  function setZoom(z) {
+    timelineZoom = Math.max(2, Math.min(400, z));
+  }
+  // Fit-to-view: pick a zoom level so (totalDuration + 30s) fits the
+  // container. Used as the initial default and after a fresh score load.
+  function fitTimelineZoom() {
+    const containerW = tlScroll.clientWidth;
+    if (!containerW) return;
+    const span = Math.max(30, totalDuration() + 30);
+    setZoom((containerW - TL_PAD_LEFT - TL_PAD_RIGHT) / span);
   }
 
   // ====== Buttons ======
@@ -1282,6 +1273,7 @@
     applyParams();
     requestAnimationFrame(loop);
   }
+  fitTimelineZoom();
   refreshUI();
   requestAnimationFrame(loop);
 })();
