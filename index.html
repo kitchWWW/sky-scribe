@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sky Scribe</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #05060d;
+    color: var(--text-primary, #d8d8e8);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #app {
+    height: 100vh;
+    display: flex;
+    align-items: stretch;
+  }
+  #sky-wrap {
+    position: relative;
+    height: 100vh;
+    aspect-ratio: 1 / 1;
+    flex-shrink: 0;
+    overflow: hidden;
+    background: #02020a;
+    box-shadow: inset 0 0 80px rgba(0,0,0,0.8);
+  }
+  #sky {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: crosshair;
+  }
+  #right-panel {
+    flex: 1;
+    min-width: 0;
+    height: 100vh;
+    padding: 40px 48px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    color: var(--text-primary, #d8d8e8);
+  }
+  #right-panel h1 {
+    font-weight: 200;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    font-size: 20px;
+    margin: 0;
+  }
+  #right-panel .description {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text-muted, #a0a0c0);
+    max-width: 620px;
+    margin: 0;
+  }
+  #right-panel .description + .description {
+    margin-top: -8px;
+  }
+  #synth-wrap {
+    background: rgba(10, 12, 26, 0.55);
+    border: 1px solid rgba(80, 80, 130, 0.25);
+    border-radius: 6px;
+    padding: 18px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  #synth-canvas {
+    width: 100%;
+    height: 340px;
+    display: block;
+  }
+  .hint {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--text-muted, #8080a0);
+    margin-top: auto;
+  }
+  .hint strong {
+    color: var(--text-primary, #d8d8e8);
+    font-weight: 500;
+  }
+  .time-control {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  #time-btn {
+    background: rgba(20, 22, 40, 0.55);
+    border: 1px solid rgba(120, 120, 180, 0.4);
+    color: var(--text-primary, #d8d8e8);
+    padding: 9px 18px;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 4px;
+    font-family: inherit;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+  }
+  #time-btn:hover {
+    border-color: rgba(200, 200, 240, 0.6);
+  }
+  #time-btn[aria-pressed="true"] {
+    background: rgba(20, 22, 40, 0.55);
+    border-color: rgba(120, 120, 180, 0.4);
+    color: var(--text-primary, #d8d8e8);
+  }
+  .time-meta {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text-muted, #8080a0);
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sky-wrap">
+    <canvas id="sky"></canvas>
+  </div>
+  <aside id="right-panel">
+    <h1>Sky Scribe</h1>
+    <p class="description">
+      An interactive sonification of an imaginary sky. Every star binds to two parameters of a generative synthesizer — its horizontal position governs one, its vertical position the other. Drag stars across the canvas to reshape the sound they control.
+    </p>
+    <p class="description">
+      Hold <strong>Shift</strong> and click two stars to forge a constellation: the line that joins them couples their parameters into the rest of the patch, introducing harmonic chaos. The wheel anchored to the horizon is both the day-night cycle and the master volume — sun overhead is silence, moon overhead is full audio. Drag the sun or moon to spin it, or enable time below to let it rotate on its own.
+    </p>
+    <div class="time-control">
+      <button id="time-btn" type="button" aria-pressed="false">Enable time</button>
+      <span class="time-meta">4-minute cycle · 2 min day · 2 min night</span>
+    </div>
+    <div id="synth-wrap">
+      <canvas id="synth-canvas"></canvas>
+    </div>
+    <div class="hint">
+      <strong>Drag</strong> stars · <strong>Shift+click</strong> to link · <strong>Turn the wheel</strong> for volume
+    </div>
+  </aside>
+</div>
+
+<script>
+(() => {
+  // ====== Canvas setup ======
+  const sky = document.getElementById('sky');
+  const skyCtx = sky.getContext('2d');
+  const synthCanvas = document.getElementById('synth-canvas');
+  const synthCtx = synthCanvas.getContext('2d');
+
+  let W = 0, H = 0;
+  function resize() {
+    const rect = document.getElementById('sky-wrap').getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    W = rect.width;
+    H = rect.height;
+    sky.width = W * dpr;
+    sky.height = H * dpr;
+    sky.style.width = W + 'px';
+    sky.style.height = H + 'px';
+    skyCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const sRect = synthCanvas.getBoundingClientRect();
+    synthCanvas.width = sRect.width * dpr;
+    synthCanvas.height = sRect.height * dpr;
+    synthCanvas.style.width = sRect.width + 'px';
+    synthCanvas.style.height = sRect.height + 'px';
+    synthCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+
+  // ====== Background stars (decorative) ======
+  const bgStars = [];
+  function makeBgStars() {
+    bgStars.length = 0;
+    for (let i = 0; i < 220; i++) {
+      bgStars.push({
+        x: Math.random(),
+        y: Math.random(),
+        r: Math.random() * 1.1 + 0.2,
+        twinkle: Math.random() * Math.PI * 2,
+        speed: Math.random() * 0.02 + 0.005,
+      });
+    }
+  }
+  makeBgStars();
+
+  // ====== The 8 active stars (param-bound) ======
+  // 8 stars × 2 coords (x,y) = 16 params
+  const STAR_NAMES = [
+    'Mercurius', 'Venus', 'Mars', 'Iuppiter',
+    'Saturnus', 'Uranus', 'Neptunus', 'Pluto',
+  ];
+  const STAR_LABELS = [
+    ['OSC1 freq', 'OSC1 detune'],
+    ['OSC2 freq', 'OSC2 detune'],
+    ['LFO1 rate', 'LFO1 depth'],
+    ['LFO2 rate', 'LFO2 depth'],
+    ['LPF cutoff', 'LPF Q'],
+    ['Delay time', 'Delay fb'],
+    ['Noise cutoff', 'Noise gain'],
+    ['Sample rate', 'Sample gain'],
+  ];
+
+  const stars = [];
+  function makeStars() {
+    stars.length = 0;
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const r = 0.32;
+      stars.push({
+        id: i,
+        x: 0.5 + Math.cos(angle) * r,
+        y: 0.5 + Math.sin(angle) * r,
+        radius: 8,
+        glow: 0,
+      });
+    }
+  }
+  makeStars();
+
+  const constellations = []; // pairs of star ids
+
+  // Wheel of day/night (master volume).
+  // angle = 0 → sun at top of wheel (full day, silent)
+  // angle = π → moon at top (full night, full volume)
+  // Default to moon-up so audio plays after Begin.
+  // Wheel sits in the lower-right with its hub on the bottom edge — the bottom
+  // of the canvas IS the horizon, so the sun and moon rise and set across it.
+  const wheel = {
+    cx: 0.80,        // wheel center x (fraction of W)
+    cy: 1.0,         // wheel center y (fraction of H) — on the horizon
+    R: 0.18,         // orbit radius (fraction of min(W,H))
+    bodySize: 17,    // sun/moon disc radius (px)
+    angle: 0,        // current rotation — start with sun fully up (silent)
+  };
+  let dragWheelOffset = 0;
+
+  // ====== Interaction ======
+  let dragging = null;
+  let draggingSun = false;
+  let dragMoved = false;
+  let connectFirst = null;
+  let hoveredStarId = null;
+
+  // ====== Time automation ======
+  let timeAuto = false;
+  let timeMode = 'idle';        // 'idle' | 'snap' | 'cycle'
+  let snapStart = 0;
+  let snapStartAngle = 0;
+  let snapTargetAngle = 0;
+  const SNAP_DURATION = 800;    // ms to ease into the random start angle
+  let cycleStart = 0;
+  let cycleStartAngle = 0;
+  const CYCLE_DURATION = 240000; // 4 minutes for one full rotation
+
+  // signed shortest delta from a to b in [-π, π]
+  function shortArc(a, b) {
+    return ((b - a) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+  }
+  function wrap2pi(a) {
+    return ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+  }
+  function updateTime(now) {
+    if (timeMode === 'snap') {
+      const t = Math.min(1, (now - snapStart) / SNAP_DURATION);
+      const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      wheel.angle = snapStartAngle + (snapTargetAngle - snapStartAngle) * eased;
+      if (t >= 1) {
+        timeMode = 'cycle';
+        cycleStart = now;
+        cycleStartAngle = wrap2pi(wheel.angle);
+      }
+    } else if (timeMode === 'cycle') {
+      const elapsed = now - cycleStart;
+      wheel.angle = wrap2pi(cycleStartAngle + (elapsed / CYCLE_DURATION) * Math.PI * 2);
+    }
+  }
+
+  const timeBtn = document.getElementById('time-btn');
+  timeBtn.addEventListener('click', () => {
+    if (!audio) audio = setupAudio();
+    timeAuto = !timeAuto;
+    timeBtn.setAttribute('aria-pressed', String(timeAuto));
+    timeBtn.textContent = timeAuto ? 'Disable time' : 'Enable time';
+    if (timeAuto) {
+      draggingSun = false;
+      timeMode = 'snap';
+      snapStart = performance.now();
+      snapStartAngle = wheel.angle;
+      const target = Math.random() * Math.PI * 2;
+      snapTargetAngle = wheel.angle + shortArc(wheel.angle, target);
+    } else {
+      timeMode = 'idle';
+    }
+  });
+
+  function pointerPos(e) {
+    const rect = sky.getBoundingClientRect();
+    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    return { x: cx / W, y: cy / H, px: cx, py: cy };
+  }
+
+  function findStar(p) {
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      const dx = (s.x - p.x) * W;
+      const dy = (s.y - p.y) * H;
+      if (dx*dx + dy*dy < (s.radius + 8) ** 2) return s;
+    }
+    return null;
+  }
+
+  function wheelCenterPx() {
+    return { x: wheel.cx * W, y: wheel.cy * H, R: wheel.R * Math.min(W, H) };
+  }
+  function pointerWheelAngle(px, py) {
+    const wc = wheelCenterPx();
+    return Math.atan2(py - wc.y, px - wc.x) + Math.PI / 2; // 0 = top
+  }
+  function hitSun(p) {
+    // Hit within an annulus around the orbit ring (above the horizon only).
+    const wc = wheelCenterPx();
+    const dx = wc.x - p.px;
+    const dy = wc.y - p.py;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    return dist > wc.R * 0.4 && dist < wc.R * 1.4 && p.py < wc.y + 8;
+  }
+
+  sky.addEventListener('mousedown', (e) => {
+    if (!audio) audio = setupAudio();
+    const p = pointerPos(e);
+    // Stars take priority over the wheel so an overlap doesn't lock you out.
+    const s = findStar(p);
+    if (!s) {
+      if (!timeAuto && hitSun(p)) {
+        draggingSun = true;
+        const pa = pointerWheelAngle(p.px, p.py);
+        dragWheelOffset = pa - wheel.angle;
+      }
+      return;
+    }
+    if (e.shiftKey) {
+      if (connectFirst === null) {
+        connectFirst = s.id;
+        s.glow = 1;
+      } else if (connectFirst !== s.id) {
+        const a = Math.min(connectFirst, s.id), b = Math.max(connectFirst, s.id);
+        const exists = constellations.find(c => c[0] === a && c[1] === b);
+        if (!exists) constellations.push([a, b]);
+        else constellations.splice(constellations.indexOf(exists), 1);
+        stars[connectFirst].glow = 0;
+        connectFirst = null;
+      } else {
+        stars[connectFirst].glow = 0;
+        connectFirst = null;
+      }
+    } else {
+      dragging = s;
+      dragMoved = false;
+    }
+  });
+
+  sky.addEventListener('mousemove', (e) => {
+    const p = pointerPos(e);
+    if (draggingSun) {
+      const pa = pointerWheelAngle(p.px, p.py);
+      let a = pa - dragWheelOffset;
+      // wrap to [0, 2π)
+      a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      wheel.angle = a;
+      return;
+    }
+    if (dragging) {
+      dragging.x = Math.max(0.04, Math.min(0.96, p.x));
+      dragging.y = Math.max(0.04, Math.min(0.96, p.y));
+      dragMoved = true;
+      hoveredStarId = dragging.id;
+      return;
+    }
+    const s = findStar(p);
+    hoveredStarId = s ? s.id : null;
+    sky.style.cursor = (s || (!timeAuto && hitSun(p))) ? 'pointer' : 'crosshair';
+  });
+
+  sky.addEventListener('mouseleave', () => {
+    if (!dragging) hoveredStarId = null;
+  });
+
+  window.addEventListener('mouseup', () => {
+    dragging = null;
+    draggingSun = false;
+  });
+
+  // ====== Web Audio ======
+  let audio = null;
+
+  function setupAudio() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Oscillators
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sawtooth';
+    const osc1Gain = ctx.createGain();
+    osc1Gain.gain.value = 0.15;
+
+    const osc2 = ctx.createOscillator();
+    osc2.type = 'square';
+    const osc2Gain = ctx.createGain();
+    osc2Gain.gain.value = 0.12;
+
+    // LFOs
+    const lfo1 = ctx.createOscillator();
+    lfo1.type = 'sine';
+    const lfo1Depth = ctx.createGain();
+    lfo1Depth.gain.value = 0;
+    lfo1.connect(lfo1Depth);
+    lfo1Depth.connect(osc1.frequency); // LFO1 modulates OSC1 freq
+
+    const lfo2 = ctx.createOscillator();
+    lfo2.type = 'triangle';
+    const lfo2Depth = ctx.createGain();
+    lfo2Depth.gain.value = 0;
+    lfo2.connect(lfo2Depth);
+
+    // Cross-modulation: osc1 modulates osc2 detune (chaos)
+    const crossMod = ctx.createGain();
+    crossMod.gain.value = 200;
+    osc1.connect(crossMod);
+    crossMod.connect(osc2.detune);
+
+    // Noise
+    const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+    noise.loop = true;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.Q.value = 4;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.value = 0.0;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+
+    // Sample bus (kept silent — no upload UI)
+    const sampleGain = ctx.createGain();
+    sampleGain.gain.value = 0;
+
+    // Mix bus
+    const preFilter = ctx.createGain();
+    osc1.connect(osc1Gain).connect(preFilter);
+    osc2.connect(osc2Gain).connect(preFilter);
+    noiseGain.connect(preFilter);
+    sampleGain.connect(preFilter);
+
+    // Lowpass filter
+    const lpf = ctx.createBiquadFilter();
+    lpf.type = 'lowpass';
+    lpf.frequency.value = 1500;
+    lpf.Q.value = 1;
+    preFilter.connect(lpf);
+
+    // LFO2 modulates filter cutoff
+    lfo2Depth.connect(lpf.frequency);
+
+    // Delay
+    const delay = ctx.createDelay(1.5);
+    delay.delayTime.value = 0.25;
+    const feedback = ctx.createGain();
+    feedback.gain.value = 0.35;
+    const wet = ctx.createGain();
+    wet.gain.value = 0.4;
+    lpf.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(wet);
+
+    // Master
+    const master = ctx.createGain();
+    master.gain.value = 0.0;
+    lpf.connect(master);
+    wet.connect(master);
+    master.connect(ctx.destination);
+
+    // Analyser for synth viz
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    master.connect(analyser);
+
+    osc1.start();
+    osc2.start();
+    lfo1.start();
+    lfo2.start();
+    noise.start();
+
+    // fade in
+    master.gain.setTargetAtTime(0.5, ctx.currentTime, 0.3);
+
+    return {
+      ctx, osc1, osc2, osc1Gain, osc2Gain,
+      lfo1, lfo2, lfo1Depth, lfo2Depth,
+      noise, noiseFilter, noiseGain,
+      sampleGain,
+      lpf, delay, feedback, wet, master, analyser, crossMod
+    };
+  }
+
+  // ====== Param mapping ======
+  // Map star coords to audio params with chaotic interplay
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function expMap(t, lo, hi) { return lo * Math.pow(hi/lo, t); }
+
+  function applyParams() {
+    if (!audio) return;
+    const t = audio.ctx.currentTime;
+    const tc = 0.05; // time constant
+
+    const s = stars;
+    // Star 0: OSC1 freq, detune. y is inverted (top = higher)
+    audio.osc1.frequency.setTargetAtTime(expMap(1 - s[0].y, 55, 880), t, tc);
+    audio.osc1.detune.setTargetAtTime(lerp(-1200, 1200, s[0].x), t, tc);
+
+    // Star 1: OSC2 freq, detune
+    audio.osc2.frequency.setTargetAtTime(expMap(1 - s[1].y, 55, 880), t, tc);
+    audio.osc2.detune.setTargetAtTime(lerp(-1200, 1200, s[1].x), t, tc);
+
+    // Star 2: LFO1 rate, depth (modulates osc1 freq)
+    audio.lfo1.frequency.setTargetAtTime(expMap(s[2].x, 0.1, 30), t, tc);
+    audio.lfo1Depth.gain.setTargetAtTime((1 - s[2].y) * 250, t, tc);
+
+    // Star 3: LFO2 rate, depth (modulates filter cutoff)
+    audio.lfo2.frequency.setTargetAtTime(expMap(s[3].x, 0.05, 18), t, tc);
+    audio.lfo2Depth.gain.setTargetAtTime((1 - s[3].y) * 3500, t, tc);
+
+    // Star 4: LPF cutoff, Q
+    audio.lpf.frequency.setTargetAtTime(expMap(s[4].x, 80, 12000), t, tc);
+    audio.lpf.Q.setTargetAtTime(lerp(0.4, 18, 1 - s[4].y), t, tc);
+
+    // Star 5: Delay time, feedback
+    audio.delay.delayTime.setTargetAtTime(lerp(0.02, 0.95, s[5].x), t, tc);
+    audio.feedback.gain.setTargetAtTime(lerp(0, 0.85, 1 - s[5].y), t, tc);
+
+    // Star 6: Noise filter cutoff, noise gain
+    audio.noiseFilter.frequency.setTargetAtTime(expMap(s[6].x, 100, 12000), t, tc);
+    audio.noiseGain.gain.setTargetAtTime(lerp(0, 0.4, 1 - s[6].y), t, tc);
+
+    // Star 7: sample gain (no source connected)
+    audio.sampleGain.gain.setTargetAtTime(lerp(0, 0.5, 1 - s[7].y), t, tc);
+
+    // Chaotic crossmod amount: depends on every star (sum of distances to center)
+    let chaos = 0;
+    for (const st of s) {
+      const dx = st.x - 0.5, dy = st.y - 0.5;
+      chaos += Math.sqrt(dx*dx + dy*dy);
+    }
+    audio.crossMod.gain.setTargetAtTime(chaos * 80, t, tc);
+
+    // Master volume: rotated wheel. angle=0 sun up = silent, angle=π moon up = full.
+    // raw is smooth (1 - cos)/2; audio uses a smoothstep so it hits 0/1 sooner.
+    const raw = (1 - Math.cos(wheel.angle)) / 2;
+    const e0 = 0.30, e1 = 0.70;
+    const xv = Math.max(0, Math.min(1, (raw - e0) / (e1 - e0)));
+    const audioAmount = xv * xv * (3 - 2 * xv);
+    audio.master.gain.setTargetAtTime(audioAmount * 0.5, t, 0.04);
+
+    // Constellation lines further mix params: pairs add/subtract pitch via detune
+    let pitchShift = 0;
+    for (const [a, b] of constellations) {
+      const dx = (s[a].x - s[b].x);
+      const dy = (s[a].y - s[b].y);
+      pitchShift += (dx + dy) * 80;
+    }
+    // tweak osc2 detune extra for connected lines (additional param-coupling chaos)
+    audio.osc2.detune.setTargetAtTime(lerp(-1200, 1200, s[1].x) + pitchShift, t, tc);
+  }
+
+  // ====== Drawing ======
+  function lerpColor(c1, c2, t) {
+    return [
+      c1[0] + (c2[0] - c1[0]) * t,
+      c1[1] + (c2[1] - c1[1]) * t,
+      c1[2] + (c2[2] - c1[2]) * t,
+    ];
+  }
+  function rgb(c, a = 1) { return `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`; }
+
+  function drawSky(time) {
+    skyCtx.clearRect(0, 0, W, H);
+
+    // Day/night blend (0 = full day, 1 = full night) tied to wheel rotation
+    const nightness = (1 - Math.cos(wheel.angle)) / 2;
+    // Twilight: when sun is near horizon (nightness ~0.3-0.7), warm tones
+    const twilight = 1 - Math.abs(nightness - 0.5) * 2; // peaks at horizon
+
+    // Sky gradient: top to bottom
+    const dayTop = [120, 175, 220];
+    const dayBot = [220, 230, 240];
+    const duskTop = [60, 40, 90];
+    const duskBot = [220, 110, 80];
+    const nightTop = [10, 8, 30];
+    const nightBot = [25, 18, 55];
+
+    const topNow = lerpColor(
+      lerpColor(dayTop, duskTop, twilight),
+      nightTop,
+      nightness
+    );
+    const botNow = lerpColor(
+      lerpColor(dayBot, duskBot, twilight),
+      nightBot,
+      nightness
+    );
+
+    const skyGrad = skyCtx.createLinearGradient(0, 0, 0, H);
+    skyGrad.addColorStop(0, rgb(topNow));
+    skyGrad.addColorStop(1, rgb(botNow));
+    skyCtx.fillStyle = skyGrad;
+    skyCtx.fillRect(0, 0, W, H);
+
+    // Sync the page background and text contrast to the sky
+    document.body.style.background = `linear-gradient(to bottom, ${rgb(topNow)}, ${rgb(botNow)})`;
+    const dayText = [22, 26, 50];
+    const nightText = [220, 222, 240];
+    const dayMuted = [70, 80, 120];
+    const nightMuted = [160, 165, 200];
+    document.body.style.setProperty('--text-primary', rgb(lerpColor(dayText, nightText, nightness)));
+    document.body.style.setProperty('--text-muted', rgb(lerpColor(dayMuted, nightMuted, nightness)));
+
+    // Nebula tint, only at night
+    if (nightness > 0.4) {
+      const grad = skyCtx.createRadialGradient(
+        W * (0.3 + Math.sin(time * 0.0002) * 0.05), H * 0.2, 50,
+        W * 0.5, H * 0.5, Math.max(W, H)
+      );
+      const na = (nightness - 0.4) / 0.6;
+      grad.addColorStop(0, `rgba(40, 30, 90, ${0.35 * na})`);
+      grad.addColorStop(0.5, `rgba(15, 10, 40, ${0.1 * na})`);
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      skyCtx.fillStyle = grad;
+      skyCtx.fillRect(0, 0, W, H);
+    }
+
+    // bg stars twinkle, fade with day
+    const starAlpha = Math.max(0, (nightness - 0.3) / 0.7);
+    if (starAlpha > 0) {
+      for (const s of bgStars) {
+        s.twinkle += s.speed;
+        const a = (0.4 + 0.5 * Math.sin(s.twinkle)) * starAlpha;
+        skyCtx.beginPath();
+        skyCtx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+        skyCtx.fillStyle = `rgba(220, 230, 255, ${a})`;
+        skyCtx.fill();
+      }
+    }
+
+    // Constellation lines
+    skyCtx.lineCap = 'round';
+    for (const [a, b] of constellations) {
+      const sa = stars[a], sb = stars[b];
+      const grad = skyCtx.createLinearGradient(sa.x*W, sa.y*H, sb.x*W, sb.y*H);
+      grad.addColorStop(0, 'rgba(180, 200, 255, 0.55)');
+      grad.addColorStop(1, 'rgba(255, 220, 180, 0.55)');
+      skyCtx.strokeStyle = grad;
+      skyCtx.lineWidth = 1.5;
+      skyCtx.beginPath();
+      skyCtx.moveTo(sa.x * W, sa.y * H);
+      skyCtx.lineTo(sb.x * W, sb.y * H);
+      skyCtx.stroke();
+    }
+
+    // Pending connect line (preview)
+    if (connectFirst !== null) {
+      const sf = stars[connectFirst];
+      skyCtx.strokeStyle = 'rgba(255, 220, 150, 0.3)';
+      skyCtx.setLineDash([4, 4]);
+      skyCtx.beginPath();
+      skyCtx.arc(sf.x * W, sf.y * H, 18, 0, Math.PI * 2);
+      skyCtx.stroke();
+      skyCtx.setLineDash([]);
+    }
+
+    // Active stars — also fade in daytime, but stay slightly visible so they're draggable
+    const activeAlpha = Math.max(0.18, nightness);
+    for (const s of stars) {
+      const pulse = 1 + Math.sin(time * 0.003 + s.id) * 0.15;
+      const r = s.radius * pulse;
+      // halo
+      const halo = skyCtx.createRadialGradient(s.x*W, s.y*H, 0, s.x*W, s.y*H, r * 5);
+      halo.addColorStop(0, `rgba(255, 240, 200, ${0.6 * activeAlpha})`);
+      halo.addColorStop(0.4, `rgba(180, 200, 255, ${0.15 * activeAlpha})`);
+      halo.addColorStop(1, 'rgba(0,0,0,0)');
+      skyCtx.fillStyle = halo;
+      skyCtx.beginPath();
+      skyCtx.arc(s.x * W, s.y * H, r * 5, 0, Math.PI * 2);
+      skyCtx.fill();
+
+      // core
+      skyCtx.fillStyle = `rgba(255,255,255,${activeAlpha})`;
+      skyCtx.beginPath();
+      skyCtx.arc(s.x * W, s.y * H, r, 0, Math.PI * 2);
+      skyCtx.fill();
+
+      // 4-point spike
+      skyCtx.strokeStyle = `rgba(255, 250, 230, ${0.8 * activeAlpha})`;
+      skyCtx.lineWidth = 1;
+      const sp = r * 3.2;
+      skyCtx.beginPath();
+      skyCtx.moveTo(s.x*W - sp, s.y*H);
+      skyCtx.lineTo(s.x*W + sp, s.y*H);
+      skyCtx.moveTo(s.x*W, s.y*H - sp);
+      skyCtx.lineTo(s.x*W, s.y*H + sp);
+      skyCtx.stroke();
+
+      // Latin planet label trailing to the side; tracks the star but does not animate
+      const labelAlpha = 0.55 * activeAlpha + 0.3;
+      skyCtx.font = '300 12px -apple-system, BlinkMacSystemFont, sans-serif';
+      skyCtx.textAlign = 'left';
+      skyCtx.textBaseline = 'middle';
+      const lx = s.x * W + s.radius * 1.8 + 6;
+      const ly = s.y * H - s.radius * 1.8 - 4;
+      skyCtx.fillStyle = `rgba(235, 230, 215, ${labelAlpha})`;
+      skyCtx.fillText(STAR_NAMES[s.id], lx, ly);
+      skyCtx.textBaseline = 'alphabetic';
+    }
+
+    // Day/night wheel
+    const wc = wheelCenterPx();
+    const Rorb = wc.R;
+    const sunPos  = { x: wc.x + Math.sin(wheel.angle) * Rorb,  y: wc.y - Math.cos(wheel.angle) * Rorb };
+    const moonPos = { x: wc.x - Math.sin(wheel.angle) * Rorb,  y: wc.y + Math.cos(wheel.angle) * Rorb };
+
+    // Faint orbit ring
+    skyCtx.strokeStyle = 'rgba(220, 220, 240, 0.12)';
+    skyCtx.lineWidth = 1;
+    skyCtx.setLineDash([2, 4]);
+    skyCtx.beginPath();
+    skyCtx.arc(wc.x, wc.y, Rorb, 0, Math.PI * 2);
+    skyCtx.stroke();
+    skyCtx.setLineDash([]);
+
+    // Connecting bar between sun and moon (the "wheel")
+    skyCtx.strokeStyle = 'rgba(220, 220, 240, 0.22)';
+    skyCtx.lineWidth = 1.5;
+    skyCtx.beginPath();
+    skyCtx.moveTo(sunPos.x, sunPos.y);
+    skyCtx.lineTo(moonPos.x, moonPos.y);
+    skyCtx.stroke();
+
+    // Center hub
+    skyCtx.fillStyle = 'rgba(220, 220, 240, 0.4)';
+    skyCtx.beginPath();
+    skyCtx.arc(wc.x, wc.y, 2.5, 0, Math.PI * 2);
+    skyCtx.fill();
+
+    // Sun: brightness ramps with how "up" it is (1 = top, 0 = bottom)
+    const sunUp = (1 + Math.cos(wheel.angle)) / 2;       // 1 when sun at top
+    const moonUp = 1 - sunUp;                            // 1 when moon at top
+
+    // Sun glow & disc
+    const sunRadius = wheel.bodySize;
+    const sunCol = lerpColor([180, 80, 60], [255, 240, 190], sunUp);
+    const sunGlowR = sunRadius * (1.5 + sunUp * 4);
+    const sg = skyCtx.createRadialGradient(sunPos.x, sunPos.y, 0, sunPos.x, sunPos.y, sunGlowR);
+    sg.addColorStop(0, rgb(sunCol, 0.35 + sunUp * 0.45));
+    sg.addColorStop(0.4, rgb(sunCol, 0.1 + sunUp * 0.15));
+    sg.addColorStop(1, rgb(sunCol, 0));
+    skyCtx.fillStyle = sg;
+    skyCtx.beginPath();
+    skyCtx.arc(sunPos.x, sunPos.y, sunGlowR, 0, Math.PI * 2);
+    skyCtx.fill();
+
+    skyCtx.fillStyle = rgb(sunCol);
+    skyCtx.beginPath();
+    skyCtx.arc(sunPos.x, sunPos.y, sunRadius, 0, Math.PI * 2);
+    skyCtx.fill();
+    if (sunUp > 0.2) {
+      const hi = skyCtx.createRadialGradient(sunPos.x - 5, sunPos.y - 5, 0, sunPos.x, sunPos.y, sunRadius);
+      hi.addColorStop(0, `rgba(255,255,240,${0.65 * sunUp})`);
+      hi.addColorStop(1, 'rgba(255,255,240,0)');
+      skyCtx.fillStyle = hi;
+      skyCtx.beginPath();
+      skyCtx.arc(sunPos.x, sunPos.y, sunRadius, 0, Math.PI * 2);
+      skyCtx.fill();
+    }
+
+    // Moon glow & disc
+    const moonRadius = wheel.bodySize;
+    const moonCol = lerpColor([90, 90, 110], [230, 235, 250], moonUp);
+    const moonGlowR = moonRadius * (1.4 + moonUp * 3);
+    const mg = skyCtx.createRadialGradient(moonPos.x, moonPos.y, 0, moonPos.x, moonPos.y, moonGlowR);
+    mg.addColorStop(0, rgb(moonCol, 0.25 + moonUp * 0.35));
+    mg.addColorStop(0.5, rgb(moonCol, 0.05 + moonUp * 0.1));
+    mg.addColorStop(1, rgb(moonCol, 0));
+    skyCtx.fillStyle = mg;
+    skyCtx.beginPath();
+    skyCtx.arc(moonPos.x, moonPos.y, moonGlowR, 0, Math.PI * 2);
+    skyCtx.fill();
+
+    skyCtx.fillStyle = rgb(moonCol);
+    skyCtx.beginPath();
+    skyCtx.arc(moonPos.x, moonPos.y, moonRadius, 0, Math.PI * 2);
+    skyCtx.fill();
+    // Crescent shadow on the moon, scaled by moonUp
+    if (moonUp > 0.05) {
+      skyCtx.fillStyle = `rgba(20, 20, 35, ${0.55 * moonUp})`;
+      skyCtx.beginPath();
+      skyCtx.arc(moonPos.x + moonRadius * 0.45, moonPos.y - moonRadius * 0.15, moonRadius * 0.95, 0, Math.PI * 2);
+      skyCtx.fill();
+    }
+
+    // Drag hint: a soft arc near the body currently above the horizon
+    if (!draggingSun && !timeAuto) {
+      const upBody = sunPos.y < wc.y ? sunPos : moonPos;
+      const hintAngle = Math.atan2(upBody.y - wc.y, upBody.x - wc.x);
+      const pulse = 0.25 + 0.15 * Math.sin(time * 0.004);
+      skyCtx.strokeStyle = `rgba(255, 230, 180, ${pulse})`;
+      skyCtx.lineWidth = 1;
+      skyCtx.setLineDash([3, 5]);
+      skyCtx.beginPath();
+      skyCtx.arc(wc.x, wc.y, Rorb + 10, hintAngle - 0.6, hintAngle + 0.6);
+      skyCtx.stroke();
+      skyCtx.setLineDash([]);
+    }
+  }
+
+  // Synth signal-flow display in the right panel
+  function drawSynth(time) {
+    const w = synthCanvas.getBoundingClientRect().width;
+    const h = synthCanvas.getBoundingClientRect().height;
+    synthCtx.clearRect(0, 0, w, h);
+
+    const modules = [
+      { id: 'osc1', label: 'OSC1', x: 0.08, y: 0.25, stars: [0] },
+      { id: 'osc2', label: 'OSC2', x: 0.08, y: 0.7, stars: [1] },
+      { id: 'lfo1', label: 'LFO1', x: 0.26, y: 0.12, stars: [2] },
+      { id: 'lfo2', label: 'LFO2', x: 0.26, y: 0.85, stars: [3] },
+      { id: 'noise', label: 'NOISE', x: 0.26, y: 0.5, stars: [6] },
+      { id: 'sample', label: 'SAMPLE', x: 0.42, y: 0.5, stars: [7] },
+      { id: 'lpf', label: 'LPF', x: 0.60, y: 0.4, stars: [4] },
+      { id: 'delay', label: 'DELAY', x: 0.78, y: 0.4, stars: [5] },
+      { id: 'out', label: 'OUT', x: 0.93, y: 0.4, stars: [] },
+    ];
+    const modById = Object.fromEntries(modules.map(m => [m.id, m]));
+
+    const sig = [
+      ['osc1', 'lpf'], ['osc2', 'lpf'], ['noise', 'lpf'], ['sample', 'lpf'],
+      ['lpf', 'delay'], ['lpf', 'out'], ['delay', 'out'],
+    ];
+    const mod = [
+      ['lfo1', 'osc1'],
+      ['lfo2', 'lpf'],
+      ['osc1', 'osc2'],
+    ];
+
+    const activeId = hoveredStarId !== null ? hoveredStarId
+                   : (connectFirst !== null ? connectFirst : null);
+    const primary = new Set();
+    if (activeId !== null) {
+      for (const m of modules) {
+        if (m.stars.includes(activeId)) primary.add(m.id);
+      }
+    }
+    const litModEdges = new Set();
+    const secondary = new Set();
+    if (primary.size) {
+      for (const [a, b] of mod) {
+        if (primary.has(a)) {
+          litModEdges.add(`${a}->${b}`);
+          secondary.add(b);
+        }
+      }
+    }
+
+    synthCtx.strokeStyle = 'rgba(140, 160, 220, 0.55)';
+    synthCtx.lineWidth = 1.4;
+    synthCtx.setLineDash([]);
+    for (const [a, b] of sig) {
+      const ma = modById[a], mb = modById[b];
+      synthCtx.beginPath();
+      synthCtx.moveTo(ma.x * w, ma.y * h);
+      const cx = (ma.x + mb.x) / 2 * w;
+      synthCtx.bezierCurveTo(cx, ma.y * h, cx, mb.y * h, mb.x * w, mb.y * h);
+      synthCtx.stroke();
+    }
+    const dashOffset = -(time * 0.05) % 12;
+    synthCtx.lineDashOffset = dashOffset;
+    synthCtx.setLineDash([4, 6]);
+    for (const [a, b] of mod) {
+      const lit = litModEdges.has(`${a}->${b}`);
+      synthCtx.strokeStyle = lit ? 'rgba(255, 220, 130, 1)' : 'rgba(255, 180, 100, 0.55)';
+      synthCtx.lineWidth = lit ? 2 : 1.2;
+      const ma = modById[a], mb = modById[b];
+      synthCtx.beginPath();
+      synthCtx.moveTo(ma.x * w, ma.y * h);
+      const cx = (ma.x + mb.x) / 2 * w;
+      synthCtx.bezierCurveTo(cx, ma.y * h, cx, mb.y * h, mb.x * w, mb.y * h);
+      synthCtx.stroke();
+    }
+    synthCtx.setLineDash([]);
+
+    for (const m of modules) {
+      const x = m.x * w, y = m.y * h;
+      const boxW = 64, boxH = 32;
+      const isPrimary = primary.has(m.id);
+      const isSecondary = secondary.has(m.id);
+
+      if (isPrimary || isSecondary) {
+        const pulse = 0.5 + 0.5 * Math.sin(time * 0.008);
+        const glowAlpha = isPrimary ? 0.55 + pulse * 0.35 : 0.25 + pulse * 0.2;
+        const glowR = isPrimary ? 44 : 32;
+        const glow = synthCtx.createRadialGradient(x, y, 0, x, y, glowR);
+        glow.addColorStop(0, `rgba(255, 220, 140, ${glowAlpha})`);
+        glow.addColorStop(1, 'rgba(255, 220, 140, 0)');
+        synthCtx.fillStyle = glow;
+        synthCtx.beginPath();
+        synthCtx.arc(x, y, glowR, 0, Math.PI * 2);
+        synthCtx.fill();
+      }
+
+      synthCtx.fillStyle = isPrimary ? '#241c10' : '#0e1124';
+      synthCtx.strokeStyle = isPrimary ? '#ffd88a'
+                          : isSecondary ? '#7a6a4a'
+                          : '#3a3e6a';
+      synthCtx.lineWidth = isPrimary ? 1.5 : 1;
+      synthCtx.fillRect(x - boxW/2, y - boxH/2, boxW, boxH);
+      synthCtx.strokeRect(x - boxW/2, y - boxH/2, boxW, boxH);
+      synthCtx.fillStyle = isPrimary ? '#fff4d8' : '#d8d8e8';
+      synthCtx.font = '11px -apple-system, sans-serif';
+      synthCtx.textAlign = 'center';
+      synthCtx.textBaseline = 'middle';
+      synthCtx.fillText(m.label, x, y - 4);
+
+      synthCtx.font = '9px -apple-system, sans-serif';
+      synthCtx.fillStyle = isPrimary ? '#ffe8a8' : '#ffd88a';
+      const badges = m.stars.map(i => `★${i+1}`).join(' ');
+      synthCtx.fillText(badges, x, y + 9);
+    }
+
+    if (activeId !== null) {
+      const lab = STAR_LABELS[activeId];
+      const s = stars[activeId];
+      synthCtx.font = '11px -apple-system, sans-serif';
+      synthCtx.fillStyle = '#ffd88a';
+      synthCtx.textAlign = 'right';
+      synthCtx.textBaseline = 'top';
+      synthCtx.fillText(`★${activeId + 1}  ${lab[0]}: ${(1-s.y).toFixed(2)}   ${lab[1]}: ${s.x.toFixed(2)}`, w - 8, 6);
+    }
+    synthCtx.textAlign = 'left';
+    synthCtx.textBaseline = 'alphabetic';
+
+    if (audio && audio.analyser) {
+      const buf = new Uint8Array(audio.analyser.fftSize);
+      audio.analyser.getByteTimeDomainData(buf);
+      synthCtx.strokeStyle = 'rgba(150, 200, 255, 0.4)';
+      synthCtx.lineWidth = 1;
+      synthCtx.beginPath();
+      const wfY = h - 6;
+      for (let i = 0; i < buf.length; i++) {
+        const x = (i / buf.length) * w;
+        const y = wfY - ((buf[i] - 128) / 128) * 22;
+        if (i === 0) synthCtx.moveTo(x, y); else synthCtx.lineTo(x, y);
+      }
+      synthCtx.stroke();
+    }
+  }
+
+  // ====== Loop ======
+  function loop(time) {
+    updateTime(time);
+    drawSky(time);
+    drawSynth(time);
+    applyParams();
+    requestAnimationFrame(loop);
+  }
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
