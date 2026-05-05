@@ -475,6 +475,7 @@
     let insertAt = (selectedIndex !== null) ? selectedIndex + 1 : score.snapshots.length;
     score.snapshots.splice(insertAt, 0, snap);
     selectSnapshot(insertAt);
+    fitTimelineZoom();
     refreshUI();
   }
   function selectSnapshot(i) {
@@ -515,6 +516,7 @@
       const next = Math.min(i, score.snapshots.length - 1);
       selectSnapshot(next);
     }
+    fitTimelineZoom();
     refreshUI();
   }
   function duplicateSelected() {
@@ -528,6 +530,7 @@
     };
     score.snapshots.splice(selectedIndex + 1, 0, copy);
     selectSnapshot(selectedIndex + 1);
+    fitTimelineZoom();
     refreshUI();
   }
   function randomizeStars() {
