@@ -276,6 +276,7 @@
       <div class="group">
         <div class="group-title">Snapshots</div>
         <button id="snapshot-btn" type="button">+ Capture snapshot</button>
+        <button id="revert-btn" type="button">Revert edits</button>
         <button id="randomize-btn" type="button">Randomize stars</button>
       </div>
 
@@ -339,6 +340,7 @@
   const rewindBtn = document.getElementById('rewind-btn');
   const fullscreenBtn = document.getElementById('fullscreen-btn');
   const snapshotBtn = document.getElementById('snapshot-btn');
+  const revertBtn = document.getElementById('revert-btn');
   const randomizeBtn = document.getElementById('randomize-btn');
   const saveBtn = document.getElementById('save-btn');
   const loadBtn = document.getElementById('load-btn');
@@ -529,13 +531,18 @@
     refreshUI();
   }
   function randomizeStars() {
+    // Edits live state only. The user must press "Capture snapshot" to
+    // commit, or "Revert edits" to discard.
     for (let j = 0; j < 8; j++) {
       liveStars[j].x = 0.05 + Math.random() * 0.9;
       liveStars[j].y = 0.05 + Math.random() * 0.9;
     }
-    if (selectedIndex !== null) {
-      score.snapshots[selectedIndex].stars = liveStars.map(s => ({ x: s.x, y: s.y }));
-    }
+  }
+  function revertEdits() {
+    // Pull live star/wheel state back from whatever the timeline says it
+    // should be at the current playhead position.
+    if (score.snapshots.length === 0) return;
+    applyTimeToLive(currentTime);
   }
   function play() {
     if (score.snapshots.length === 0) return;
@@ -1080,6 +1087,9 @@
     // they'll need to capture a snapshot afterward.
     dragging = s;
   });
+  // Drag updates the LIVE state only — snapshots are written on explicit
+  // "Capture snapshot". Use "Revert edits" to discard local changes and
+  // pull the timeline's current value back into the live state.
   window.addEventListener('mousemove', (e) => {
     if (draggingSun) {
       const p = pointerSky(e);
@@ -1087,18 +1097,12 @@
       let a = pa - dragWheelOffset;
       a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
       wheel.angle = a;
-      if (selectedIndex !== null) score.snapshots[selectedIndex].wheelAngle = wheel.angle;
       return;
     }
     if (dragging) {
       const p = pointerSky(e);
       dragging.x = Math.max(0.04, Math.min(0.96, p.x));
       dragging.y = Math.max(0.04, Math.min(0.96, p.y));
-      if (selectedIndex !== null) {
-        const sn = score.snapshots[selectedIndex];
-        sn.stars[dragging.id].x = dragging.x;
-        sn.stars[dragging.id].y = dragging.y;
-      }
     }
   });
   window.addEventListener('mouseup', () => {
@@ -1225,6 +1229,7 @@
     if (!audio) audio = setupAudio();
     randomizeStars();
   });
+  revertBtn.addEventListener('click', revertEdits);
   saveBtn.addEventListener('click', saveScore);
   loadBtn.addEventListener('click', () => loadInput.click());
   loadInput.addEventListener('change', (e) => {
