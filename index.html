@@ -205,6 +205,20 @@
     'Mercurius', 'Venus', 'Mars', 'Iuppiter',
     'Saturnus', 'Uranus', 'Neptunus', 'Pluto',
   ];
+  // Per-planet visual flavor — kept identical between index.html and admin.html
+  const PLANET_SIZES = [6, 9, 7, 12, 11, 9, 9, 5];
+  // Eight equidistant hues at S=0.40, V=1.0 — light, star-like tints.
+  // Hues are reordered so each planet gets the closest natural shade.
+  const PLANET_COLORS = [
+    [204, 153, 255], // Mercurius — 270° pale violet (cool/distant)
+    [255, 230, 153], // Venus     —  45° pale yellow
+    [255, 153, 153], // Mars      —   0° pale red
+    [204, 255, 153], // Iuppiter  —  90° pale yellow-green
+    [153, 255, 179], // Saturnus  — 135° pale green-gold
+    [153, 255, 255], // Uranus    — 180° pale cyan
+    [153, 179, 255], // Neptunus  — 225° pale blue
+    [255, 153, 230], // Pluto     — 315° pale pink
+  ];
   const STAR_LABELS = [
     ['OSC1 freq', 'OSC1 detune'],
     ['OSC2 freq', 'OSC2 detune'],
@@ -226,7 +240,7 @@
         id: i,
         x: 0.5 + Math.cos(angle) * r,
         y: 0.5 + Math.sin(angle) * r,
-        radius: 8,
+        radius: PLANET_SIZES[i],
         glow: 0,
       });
     }
@@ -646,9 +660,10 @@
     for (const s of stars) {
       const pulse = 1 + Math.sin(time * 0.003 + s.id) * 0.15;
       const r = s.radius * pulse;
+      const c = PLANET_COLORS[s.id];
       // halo
       const halo = skyCtx.createRadialGradient(s.x*W, s.y*H, 0, s.x*W, s.y*H, r * 5);
-      halo.addColorStop(0, `rgba(255, 240, 200, ${0.6 * activeAlpha})`);
+      halo.addColorStop(0, `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${0.6 * activeAlpha})`);
       halo.addColorStop(0.4, `rgba(180, 200, 255, ${0.15 * activeAlpha})`);
       halo.addColorStop(1, 'rgba(0,0,0,0)');
       skyCtx.fillStyle = halo;
@@ -657,7 +672,7 @@
       skyCtx.fill();
 
       // core
-      skyCtx.fillStyle = `rgba(255,255,255,${activeAlpha})`;
+      skyCtx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${activeAlpha})`;
       skyCtx.beginPath();
       skyCtx.arc(s.x * W, s.y * H, r, 0, Math.PI * 2);
       skyCtx.fill();

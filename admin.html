@@ -236,13 +236,18 @@
     height: 100%;
     cursor: pointer;
   }
-  /* Fullscreen mode: hide everything except the sky-wrap */
+  /* Fullscreen mode: hide everything except the sky-wrap. The wrap fills the
+     viewport with the sky background, but the canvas stays a centered square
+     so its aspect ratio is preserved. */
   #sky-wrap:fullscreen {
     width: 100vw;
     height: 100vh;
     aspect-ratio: auto;
     max-width: none;
     max-height: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   #sky-wrap:-webkit-full-screen {
     width: 100vw;
@@ -250,6 +255,15 @@
     aspect-ratio: auto;
     max-width: none;
     max-height: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #sky-wrap:fullscreen #sky,
+  #sky-wrap:-webkit-full-screen #sky {
+    width: min(100vw, 100vh);
+    height: min(100vw, 100vh);
+    flex: 0 0 auto;
   }
 </style>
 </head>
@@ -269,6 +283,7 @@
         <button id="play-btn" class="primary" type="button">▶ Play</button>
         <div class="group-row">
           <button id="rewind-btn" type="button">Rewind</button>
+          <button id="mute-btn" type="button" aria-pressed="false">🔊 Mute</button>
           <button id="fullscreen-btn" type="button">Fullscreen</button>
         </div>
       </div>
@@ -302,6 +317,10 @@
           Transition to next (s)
           <input type="number" id="trans-input" min="0" step="0.5" value="30">
         </label>
+        <div class="group-row">
+          <button id="move-left-btn" type="button">← Move left</button>
+          <button id="move-right-btn" type="button">Move right →</button>
+        </div>
         <div class="group-row">
           <button id="duplicate-btn" type="button">Duplicate</button>
           <button id="delete-btn" class="danger" type="button">Delete</button>
@@ -338,6 +357,7 @@
 
   const playBtn = document.getElementById('play-btn');
   const rewindBtn = document.getElementById('rewind-btn');
+  const muteBtn = document.getElementById('mute-btn');
   const fullscreenBtn = document.getElementById('fullscreen-btn');
   const snapshotBtn = document.getElementById('snapshot-btn');
   const revertBtn = document.getElementById('revert-btn');
@@ -351,6 +371,8 @@
   const transInput = document.getElementById('trans-input');
   const deleteBtn = document.getElementById('delete-btn');
   const duplicateBtn = document.getElementById('duplicate-btn');
+  const moveLeftBtn = document.getElementById('move-left-btn');
+  const moveRightBtn = document.getElementById('move-right-btn');
   const zoomInBtn = document.getElementById('zoom-in-btn');
   const zoomOutBtn = document.getElementById('zoom-out-btn');
   const metaCount = document.getElementById('meta-count');
@@ -397,10 +419,24 @@
 
   // ====== Live state ======
   const STAR_NAMES = ['Mercurius', 'Venus', 'Mars', 'Iuppiter', 'Saturnus', 'Uranus', 'Neptunus', 'Pluto'];
+  // Per-planet visual flavor — kept identical between index.html and admin.html
+  const PLANET_SIZES = [6, 9, 7, 12, 11, 9, 9, 5];
+  // Eight equidistant hues at S=0.40, V=1.0 — light, star-like tints.
+  // Hues are reordered so each planet gets the closest natural shade.
+  const PLANET_COLORS = [
+    [204, 153, 255], // Mercurius — 270° pale violet (cool/distant)
+    [255, 230, 153], // Venus     —  45° pale yellow
+    [255, 153, 153], // Mars      —   0° pale red
+    [204, 255, 153], // Iuppiter  —  90° pale yellow-green
+    [153, 255, 179], // Saturnus  — 135° pale green-gold
+    [153, 255, 255], // Uranus    — 180° pale cyan
+    [153, 179, 255], // Neptunus  — 225° pale blue
+    [255, 153, 230], // Pluto     — 315° pale pink
+  ];
   const liveStars = [];
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
-    liveStars.push({ id: i, x: 0.5 + Math.cos(a) * 0.32, y: 0.5 + Math.sin(a) * 0.32, radius: 8 });
+    liveStars.push({ id: i, x: 0.5 + Math.cos(a) * 0.32, y: 0.5 + Math.sin(a) * 0.32, radius: PLANET_SIZES[i] });
   }
   const wheel = { cx: 0.80, cy: 1.0, R: 0.18, bodySize: 17, angle: Math.PI }; // start full-volume
   let dragWheelOffset = 0;
@@ -411,6 +447,7 @@
   let selectedIndex = null;
   let currentTime = 0;          // in seconds
   let isPlaying = false;
+  let isMuted = false;
   let playStartedReal = 0;
   let playStartedAtTime = 0;
   let timelineZoom = 30;        // px per second
@@ -571,6 +608,16 @@
     fitTimelineZoom();
     refreshUI();
   }
+  function moveSelected(dir) {
+    if (selectedIndex === null) return;
+    const i = selectedIndex;
+    const j = i + dir;
+    if (j < 0 || j >= score.snapshots.length) return;
+    const snaps = score.snapshots;
+    [snaps[i], snaps[j]] = [snaps[j], snaps[i]];
+    selectSnapshot(j);
+    refreshUI();
+  }
   function duplicateSelected() {
     if (selectedIndex === null) return;
     const src = score.snapshots[selectedIndex];
@@ -641,28 +688,39 @@
     a.remove();
     URL.revokeObjectURL(url);
   }
+  function applyScoreData(parsed) {
+    if (!parsed || !Array.isArray(parsed.snapshots)) throw new Error('missing snapshots array');
+    score.snapshots = parsed.snapshots.map(s => ({
+      stars: s.stars.map(p => ({ x: Number(p.x), y: Number(p.y) })),
+      wheelAngle: typeof s.wheelAngle === 'number' ? s.wheelAngle : Math.PI,
+      hold: typeof s.hold === 'number' ? Math.max(0, s.hold) : 0,
+      transition: typeof s.transition === 'number' ? Math.max(0, s.transition) : 30,
+    }));
+    currentTime = 0;
+    selectSnapshot(null);
+    if (score.snapshots.length > 0) applyTimeToLive(0);
+    fitTimelineZoom();
+    refreshUI();
+  }
   function loadScoreFile(file) {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(reader.result);
-        if (!parsed || !Array.isArray(parsed.snapshots)) throw new Error('missing snapshots array');
-        score.snapshots = parsed.snapshots.map(s => ({
-          stars: s.stars.map(p => ({ x: Number(p.x), y: Number(p.y) })),
-          wheelAngle: typeof s.wheelAngle === 'number' ? s.wheelAngle : Math.PI,
-          hold: typeof s.hold === 'number' ? Math.max(0, s.hold) : 0,
-          transition: typeof s.transition === 'number' ? Math.max(0, s.transition) : 30,
-        }));
-        currentTime = 0;
-        selectSnapshot(null);
-        if (score.snapshots.length > 0) applyTimeToLive(0);
-        fitTimelineZoom();
-        refreshUI();
+        applyScoreData(JSON.parse(reader.result));
       } catch (e) {
         alert('Failed to load score: ' + e.message);
       }
     };
     reader.readAsText(file);
+  }
+  // Auto-load score.json from the same directory on startup. Silently no-ops
+  // if the file is missing or the page was opened over file:// where fetch
+  // can't read sibling files.
+  function autoLoadDefaultScore() {
+    fetch('score.json', { cache: 'no-cache' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) applyScoreData(data); })
+      .catch(() => {});
   }
   function toggleFullscreen() {
     const wrap = document.getElementById('sky-wrap');
@@ -688,6 +746,8 @@
       // Don't stomp values while user is typing
       if (document.activeElement !== holdInput) holdInput.value = s.hold;
       if (document.activeElement !== transInput) transInput.value = s.transition;
+      moveLeftBtn.disabled = selectedIndex === 0;
+      moveRightBtn.disabled = selectedIndex === score.snapshots.length - 1;
     }
   }
 
@@ -728,11 +788,13 @@
     const wet = ctx.createGain(); wet.gain.value = 0.4;
     lpf.connect(delay); delay.connect(feedback); feedback.connect(delay); delay.connect(wet);
     const master = ctx.createGain(); master.gain.value = 0;
-    lpf.connect(master); wet.connect(master); master.connect(ctx.destination);
+    lpf.connect(master); wet.connect(master);
+    const muteGain = ctx.createGain(); muteGain.gain.value = isMuted ? 0 : 1;
+    master.connect(muteGain); muteGain.connect(ctx.destination);
     osc1.start(); osc2.start(); lfo1.start(); lfo2.start(); noise.start();
     master.gain.setTargetAtTime(0.5, ctx.currentTime, 0.3);
     return { ctx, osc1, osc2, osc1Gain, osc2Gain, lfo1, lfo2, lfo1Depth, lfo2Depth,
-      noise, noiseFilter, noiseGain, sampleGain, lpf, delay, feedback, wet, master, crossMod };
+      noise, noiseFilter, noiseGain, sampleGain, lpf, delay, feedback, wet, master, muteGain, crossMod };
   }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function expMap(t, lo, hi) { return lo * Math.pow(hi / lo, t); }
@@ -820,8 +882,9 @@
     for (const s of liveStars) {
       const pulse = 1 + Math.sin(time * 0.003 + s.id) * 0.15;
       const r = s.radius * pulse;
+      const c = PLANET_COLORS[s.id];
       const halo = skyCtx.createRadialGradient(s.x*W, s.y*H, 0, s.x*W, s.y*H, r * 5);
-      halo.addColorStop(0, `rgba(255, 240, 200, ${0.6 * activeAlpha})`);
+      halo.addColorStop(0, `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${0.6 * activeAlpha})`);
       halo.addColorStop(0.4, `rgba(180, 200, 255, ${0.15 * activeAlpha})`);
       halo.addColorStop(1, 'rgba(0,0,0,0)');
       skyCtx.fillStyle = halo;
@@ -829,7 +892,7 @@
       skyCtx.arc(s.x * W, s.y * H, r * 5, 0, Math.PI * 2);
       skyCtx.fill();
 
-      skyCtx.fillStyle = `rgba(255,255,255,${activeAlpha})`;
+      skyCtx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${activeAlpha})`;
       skyCtx.beginPath();
       skyCtx.arc(s.x * W, s.y * H, r, 0, Math.PI * 2);
       skyCtx.fill();
@@ -1349,6 +1412,12 @@
     togglePlay();
   });
   rewindBtn.addEventListener('click', rewind);
+  muteBtn.addEventListener('click', () => {
+    isMuted = !isMuted;
+    if (audio) audio.muteGain.gain.setTargetAtTime(isMuted ? 0 : 1, audio.ctx.currentTime, 0.01);
+    muteBtn.textContent = isMuted ? '🔇 Unmute' : '🔊 Mute';
+    muteBtn.setAttribute('aria-pressed', String(isMuted));
+  });
   fullscreenBtn.addEventListener('click', toggleFullscreen);
   snapshotBtn.addEventListener('click', () => {
     if (!audio) audio = setupAudio();
@@ -1368,6 +1437,8 @@
   });
   deleteBtn.addEventListener('click', deleteSelected);
   duplicateBtn.addEventListener('click', duplicateSelected);
+  moveLeftBtn.addEventListener('click', () => moveSelected(-1));
+  moveRightBtn.addEventListener('click', () => moveSelected(1));
   zoomInBtn.addEventListener('click', () => setZoom(timelineZoom * 1.5));
   zoomOutBtn.addEventListener('click', () => setZoom(timelineZoom / 1.5));
   holdInput.addEventListener('input', (e) => setHold(e.target.value));
@@ -1409,6 +1480,7 @@
   }
   fitTimelineZoom();
   refreshUI();
+  autoLoadDefaultScore();
   requestAnimationFrame(loop);
 })();
 </script>
